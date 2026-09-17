@@ -218,17 +218,12 @@ server.tool(
 
       let response;
       if (args.projectId) {
-        // Get tasks for a specific project - need to get the first view
-        const projectResponse = await client.get<Project>(`/projects/${args.projectId}`);
-        const project = projectResponse.data;
-        const firstView = project.views?.[0];
-        if (!firstView) {
-          return formatError(new Error("Project has no views"));
-        }
-        response = await client.get<Task[]>(
-          `/projects/${args.projectId}/views/${firstView.id}/tasks`,
-          query
-        );
+        // Get tasks for a specific project via the native per-project tasks
+        // endpoint. Using a view here is WRONG: views carry their own filter
+        // (e.g. the default "List" view filters done = false), which silently
+        // dropped completed tasks. /projects/{id}/tasks returns ALL tasks,
+        // completed included. (Fixes upstream issue about tasks_list.)
+        response = await client.get<Task[]>(`/projects/${args.projectId}/tasks`, query);
       } else {
         // Get all tasks
         response = await client.get<Task[]>("/tasks", query);
@@ -327,7 +322,47 @@ server.tool(
   async (args) => {
     try {
       const client = getClient();
-      const body: Record<string, unknown> = {};
+      // Read-modify-write: Vikunja's POST /tasks/{id} REPLACES the whole task,
+      // resetting any field absent from the body to its zero value (e.g. an
+      // update that only sets project_id would silently clear `done`). Fetch the
+      // current task first and merge only the fields the caller actually passed,
+      // then POST the merged object. (Fixes upstream issue about tasks_update
+      // clearing unspecified fields.)
+      const currentResponse = await client.get<Task>(`/tasks/${args.taskId}`);
+      const current = currentResponse.data;
+
+      const body: Record<string, unknown> = {
+        title: current.title,
+        done: current.done,
+        priority: current.priority ?? 0,
+      };
+      if (
+        current.description !== undefined &&
+        current.description !== null &&
+        current.description !== ""
+      ) {
+        body.description = current.description;
+      }
+      if (current.due_date !== undefined && current.due_date !== null) {
+        body.due_date = current.due_date;
+      }
+      if (current.start_date !== undefined && current.start_date !== null) {
+        body.start_date = current.start_date;
+      }
+      if (current.end_date !== undefined && current.end_date !== null) {
+        body.end_date = current.end_date;
+      }
+      if (
+        current.hex_color !== undefined &&
+        current.hex_color !== null &&
+        current.hex_color !== ""
+      ) {
+        body.hex_color = current.hex_color;
+      }
+      if (current.percent_done !== undefined && current.percent_done !== null) {
+        body.percent_done = current.percent_done;
+      }
+
       if (args.title !== undefined) body.title = args.title;
       if (args.description !== undefined) body.description = args.description;
       if (args.dueDate !== undefined) body.due_date = args.dueDate;

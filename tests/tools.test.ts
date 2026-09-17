@@ -287,41 +287,36 @@ describe("MCP Tool Handlers", () => {
       expect(data.tasks).toEqual(mockTasks);
     });
 
-    it("should list tasks for a specific project", async () => {
-      const mockProject = { id: 1, views: [{ id: 10, title: "List" }] };
-      const mockTasks = [{ id: 1, title: "Task 1" }];
-      mockGet.mockResolvedValueOnce({ data: mockProject }); // First call for project
-      mockGet.mockResolvedValueOnce({ data: mockTasks, pagination: null }); // Second call for tasks
+    it("should list tasks for a specific project via the project tasks endpoint", async () => {
+      const mockTasks = [
+        { id: 1, title: "Task 1", done: false },
+        { id: 2, title: "Task 2", done: true },
+      ];
+      mockGet.mockResolvedValueOnce({ data: mockTasks, pagination: null });
 
       const response = await callTool("tasks_list", { projectId: 1 });
       const data = parseResponse(response);
 
-      expect(mockGet).toHaveBeenCalledWith("/projects/1");
-      expect(mockGet).toHaveBeenCalledWith(
-        "/projects/1/views/10/tasks",
-        expect.any(Object)
-      );
+      // Must NOT go through a view: the default "List" view filters
+      // done = false, which silently hid completed tasks.
+      expect(mockGet).toHaveBeenCalledTimes(1);
+      expect(mockGet).toHaveBeenCalledWith("/projects/1/tasks", expect.any(Object));
       expect(data.tasks).toEqual(mockTasks);
     });
 
-    it("should handle project with no views", async () => {
-      mockGet.mockResolvedValueOnce({ data: { id: 1, views: [] } });
+    it("should pass query parameters to the project tasks endpoint", async () => {
+      mockGet.mockResolvedValueOnce({ data: [] });
 
-      const response = await callTool("tasks_list", { projectId: 1 });
-      const data = parseResponse(response);
+      await callTool("tasks_list", { projectId: 1, search: "bug", perPage: 10 });
 
-      expect(response.isError).toBe(true);
-      expect(data.message).toBe("Project has no views");
-    });
-
-    it("should handle project with undefined views", async () => {
-      mockGet.mockResolvedValueOnce({ data: { id: 1 } }); // views is undefined
-
-      const response = await callTool("tasks_list", { projectId: 1 });
-      const data = parseResponse(response);
-
-      expect(response.isError).toBe(true);
-      expect(data.message).toBe("Project has no views");
+      expect(mockGet).toHaveBeenCalledWith("/projects/1/tasks", {
+        page: undefined,
+        per_page: 10,
+        s: "bug",
+        sort_by: undefined,
+        order_by: undefined,
+        filter: undefined,
+      });
     });
 
     it("should pass query parameters for tasks", async () => {
@@ -409,8 +404,17 @@ describe("MCP Tool Handlers", () => {
   });
 
   describe("tasks_update", () => {
-    it("should update a task", async () => {
-      const mockTask = { id: 1, title: "Updated Task", done: true };
+    it("should merge the update onto the current task", async () => {
+      const current = {
+        id: 1,
+        title: "Old Title",
+        description: "Old Description",
+        done: false,
+        priority: 2,
+        due_date: "2024-12-31T23:59:59Z",
+      };
+      mockGet.mockResolvedValueOnce({ data: current });
+      const mockTask = { ...current, title: "Updated Task", done: true, priority: 5 };
       mockPost.mockResolvedValueOnce({ data: mockTask });
 
       const response = await callTool("tasks_update", {
@@ -423,17 +427,69 @@ describe("MCP Tool Handlers", () => {
       });
       const data = parseResponse(response);
 
+      expect(mockGet).toHaveBeenCalledWith("/tasks/1");
       expect(mockPost).toHaveBeenCalledWith("/tasks/1", {
         title: "Updated Task",
         done: true,
         priority: 5,
+        description: "Old Description",
+        due_date: "2024-12-31T23:59:59Z",
         project_id: 2,
         is_favorite: true,
       });
       expect(data).toEqual(mockTask);
     });
 
+    it("should not clear fields that are not passed in the update", async () => {
+      // Regression: Vikunja's POST /tasks/{id} replaces the whole task, so a
+      // partial update used to wipe description/due_date and reopen completed
+      // tasks (data loss reported in issue #2).
+      const current = {
+        id: 1,
+        title: "Task",
+        description: "keep me",
+        done: true,
+        priority: 4,
+        due_date: "2024-12-31T23:59:59Z",
+        start_date: "2024-12-01T00:00:00Z",
+        end_date: "2024-12-15T00:00:00Z",
+        hex_color: "ff0000",
+        percent_done: 0.75,
+      };
+      mockGet.mockResolvedValueOnce({ data: current });
+      mockPost.mockResolvedValueOnce({ data: { ...current, priority: 5 } });
+
+      await callTool("tasks_update", { taskId: 1, priority: 5 });
+
+      expect(mockGet).toHaveBeenCalledWith("/tasks/1");
+      expect(mockPost).toHaveBeenCalledWith("/tasks/1", {
+        title: "Task",
+        description: "keep me",
+        done: true,
+        priority: 5,
+        due_date: "2024-12-31T23:59:59Z",
+        start_date: "2024-12-01T00:00:00Z",
+        end_date: "2024-12-15T00:00:00Z",
+        hex_color: "ff0000",
+        percent_done: 0.75,
+      });
+    });
+
     it("should update task with all date fields", async () => {
+      mockGet.mockResolvedValueOnce({
+        data: {
+          id: 1,
+          title: "Task",
+          description: "old",
+          done: false,
+          priority: 0,
+          due_date: "2024-01-01T00:00:00Z",
+          start_date: "2024-01-01T00:00:00Z",
+          end_date: "2024-01-01T00:00:00Z",
+          hex_color: "000000",
+          percent_done: 0,
+        },
+      });
       mockPost.mockResolvedValueOnce({ data: { id: 1 } });
 
       await callTool("tasks_update", {
@@ -447,12 +503,15 @@ describe("MCP Tool Handlers", () => {
       });
 
       expect(mockPost).toHaveBeenCalledWith("/tasks/1", {
+        title: "Task",
+        done: false,
+        priority: 0,
+        description: "Updated description",
         due_date: "2024-12-31T23:59:59Z",
         start_date: "2024-12-01T00:00:00Z",
         end_date: "2024-12-15T00:00:00Z",
         hex_color: "ff0000",
         percent_done: 0.75,
-        description: "Updated description",
       });
     });
   });
