@@ -327,7 +327,30 @@ server.tool(
   async (args) => {
     try {
       const client = getClient();
-      const body: Record<string, unknown> = {};
+
+      // Vikunja's update endpoint replaces the whole task rather than merging
+      // partial fields, so fields omitted from the request body get reset to
+      // their zero value (e.g. description would be cleared when only marking
+      // a task done). Fetch the current task first and merge changes onto it.
+      const current = await client.get<Task>(`/tasks/${args.taskId}`);
+      const body: Record<string, unknown> = {
+        title: current.data.title,
+        description: current.data.description,
+        due_date: current.data.due_date,
+        start_date: current.data.start_date,
+        end_date: current.data.end_date,
+        priority: current.data.priority,
+        done: current.data.done,
+        hex_color: current.data.hex_color,
+        percent_done: current.data.percent_done,
+        project_id: current.data.project_id,
+        is_favorite: current.data.is_favorite,
+        repeat_after: current.data.repeat_after,
+        repeat_mode: current.data.repeat_mode,
+        assignees: current.data.assignees,
+        labels: current.data.labels,
+      };
+
       if (args.title !== undefined) body.title = args.title;
       if (args.description !== undefined) body.description = args.description;
       if (args.dueDate !== undefined) body.due_date = args.dueDate;
