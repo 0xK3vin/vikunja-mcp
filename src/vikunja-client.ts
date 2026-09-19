@@ -15,6 +15,12 @@ export interface ApiResponse<T> {
   pagination?: PaginationInfo;
 }
 
+export interface BinaryData {
+  buffer: Buffer;
+  contentType: string;
+  filename?: string;
+}
+
 export interface ApiErrorDetails {
   code: number;
   message: string;
@@ -102,6 +108,25 @@ function buildErrorMessage(
   });
 }
 
+/**
+ * Extract the filename from a Content-Disposition header, if present
+ */
+function parseContentDispositionFilename(header: string | null): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+  const encoded = header.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      // Fall through to the plain filename parameter
+    }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1].trim() : undefined;
+}
+
 // Retry configuration
 const RETRY_CONFIG = {
   maxRetries: 3,
@@ -175,6 +200,7 @@ export class VikunjaClient {
     options: {
       body?: unknown;
       query?: Record<string, string | number | boolean | undefined>;
+      binary?: boolean;
     } = {}
   ): Promise<ApiResponse<T>> {
     // Build URL with query parameters
@@ -246,6 +272,15 @@ export class VikunjaClient {
           throw buildErrorMessage(method, path, response.status, response.statusText, apiMessage);
         }
 
+        if (options.binary) {
+          const binary: BinaryData = {
+            buffer: Buffer.from(await response.arrayBuffer()),
+            contentType: response.headers.get("content-type") || "application/octet-stream",
+            filename: parseContentDispositionFilename(response.headers.get("content-disposition")),
+          };
+          return { data: binary as T };
+        }
+
         // Handle empty responses (204 No Content, etc.)
         if (response.status === 204 || response.headers.get("content-length") === "0") {
           return { data: {} as T };
@@ -281,6 +316,13 @@ export class VikunjaClient {
     query?: Record<string, string | number | boolean | undefined>
   ): Promise<ApiResponse<T>> {
     return this.request<T>("GET", path, { query });
+  }
+
+  async getBinary(
+    path: string,
+    query?: Record<string, string | number | boolean | undefined>
+  ): Promise<ApiResponse<BinaryData>> {
+    return this.request<BinaryData>("GET", path, { query, binary: true });
   }
 
   async post<T>(path: string, body?: unknown): Promise<ApiResponse<T>> {

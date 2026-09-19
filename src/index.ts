@@ -2,6 +2,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { getClient } from "./vikunja-client.js";
 import type {
@@ -16,6 +17,7 @@ import type {
   TaskRelation,
   ProjectView,
   Message,
+  TaskAttachment,
 } from "./types.js";
 
 // Create MCP server
@@ -468,6 +470,129 @@ server.tool(
         success: true,
         message: "Label removed from task",
       });
+    } catch (error) {
+      return formatError(error);
+    }
+  }
+);
+
+// ============================================================================
+// Attachment Tools
+// ============================================================================
+
+// Image types that MCP clients (and LLMs) can render inline
+const INLINE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+// Largest attachment returned inline in the tool result (bytes)
+const MAX_INLINE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+function isTextMime(mime: string): boolean {
+  return (
+    mime.startsWith("text/") ||
+    ["application/json", "application/xml", "application/x-yaml", "application/yaml"].includes(mime)
+  );
+}
+
+server.tool(
+  "task_attachments_list",
+  "List all attachments on a task (file name, MIME type, size)",
+  {
+    taskId: z.number().describe("The task ID"),
+  },
+  async (args) => {
+    try {
+      const client = getClient();
+      const response = await client.get<TaskAttachment[]>(`/tasks/${args.taskId}/attachments`);
+      return formatResponse({ attachments: response.data });
+    } catch (error) {
+      return formatError(error);
+    }
+  }
+);
+
+server.tool(
+  "task_attachment_get",
+  "Download a task attachment. Images are returned inline so they can be viewed, text files as text, " +
+    "other files as an embedded binary resource. Use savePath to write the file to disk instead.",
+  {
+    taskId: z.number().describe("The task ID"),
+    attachmentId: z.number().describe("The attachment ID (from task_attachments_list)"),
+    previewSize: z
+      .enum(["sm", "md", "lg", "xl"])
+      .optional()
+      .describe(
+        "For image attachments only: return a resized PNG preview instead of the original " +
+          "(sm=100px, md=200px, lg=400px, xl=800px). Useful for large images or unsupported formats."
+      ),
+    savePath: z
+      .string()
+      .optional()
+      .describe("Absolute file path to save the attachment to, instead of returning its content"),
+  },
+  async (args) => {
+    try {
+      const client = getClient();
+      const response = await client.getBinary(
+        `/tasks/${args.taskId}/attachments/${args.attachmentId}`,
+        { preview_size: args.previewSize }
+      );
+      const { buffer, filename } = response.data;
+      const mime = response.data.contentType.split(";")[0].trim().toLowerCase();
+      const meta = {
+        taskId: args.taskId,
+        attachmentId: args.attachmentId,
+        filename,
+        mime,
+        size: buffer.length,
+      };
+
+      if (args.savePath) {
+        await writeFile(args.savePath, buffer);
+        return formatResponse({ ...meta, savedTo: args.savePath });
+      }
+
+      if (buffer.length > MAX_INLINE_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Attachment is ${buffer.length} bytes, larger than the ${MAX_INLINE_ATTACHMENT_BYTES} byte inline limit. ` +
+            "Use savePath to write it to disk" +
+            (mime.startsWith("image/") ? ", or previewSize to get a smaller preview." : ".")
+        );
+      }
+
+      if (INLINE_IMAGE_TYPES.has(mime)) {
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(meta, null, 2) },
+            { type: "image" as const, data: buffer.toString("base64"), mimeType: mime },
+          ],
+        };
+      }
+
+      if (isTextMime(mime)) {
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(meta, null, 2) },
+            { type: "text" as const, text: buffer.toString("utf-8") },
+          ],
+        };
+      }
+
+      const hint = mime.startsWith("image/")
+        ? " This image format cannot be shown inline; use previewSize to get a PNG preview."
+        : "";
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(meta, null, 2) + hint },
+          {
+            type: "resource" as const,
+            resource: {
+              uri: `vikunja://tasks/${args.taskId}/attachments/${args.attachmentId}`,
+              mimeType: mime,
+              blob: buffer.toString("base64"),
+            },
+          },
+        ],
+      };
     } catch (error) {
       return formatError(error);
     }
