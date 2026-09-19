@@ -5,12 +5,14 @@ const mockGet = vi.fn();
 const mockPost = vi.fn();
 const mockPut = vi.fn();
 const mockDelete = vi.fn();
+const mockGetBinary = vi.fn();
 
 const mockClient = {
   get: mockGet,
   post: mockPost,
   put: mockPut,
   delete: mockDelete,
+  getBinary: mockGetBinary,
 };
 
 vi.mock("../src/vikunja-client.js", () => ({
@@ -561,6 +563,109 @@ describe("MCP Tool Handlers", () => {
   // ============================================================================
   // Comment Tools
   // ============================================================================
+
+  describe("task_attachments_list", () => {
+    it("should list attachments on a task", async () => {
+      const mockAttachments = [
+        { id: 3, task_id: 1, file: { id: 9, name: "shot.png", mime: "image/png", size: 42 } },
+      ];
+      mockGet.mockResolvedValueOnce({ data: mockAttachments });
+
+      const response = await callTool("task_attachments_list", { taskId: 1 });
+      const data = parseResponse(response);
+
+      expect(mockGet).toHaveBeenCalledWith("/tasks/1/attachments");
+      expect(data.attachments).toEqual(mockAttachments);
+    });
+  });
+
+  describe("task_attachment_get", () => {
+    const binary = (contents: string, contentType: string) => ({
+      data: { buffer: Buffer.from(contents), contentType, filename: "file" },
+    });
+
+    it("should return images inline as image content", async () => {
+      mockGetBinary.mockResolvedValueOnce(binary("PNGDATA", "image/png"));
+
+      const response = (await callTool("task_attachment_get", {
+        taskId: 1,
+        attachmentId: 3,
+      })) as unknown as { content: Array<Record<string, string>> };
+
+      expect(mockGetBinary).toHaveBeenCalledWith("/tasks/1/attachments/3", {
+        preview_size: undefined,
+      });
+      expect(response.content[1]).toEqual({
+        type: "image",
+        data: Buffer.from("PNGDATA").toString("base64"),
+        mimeType: "image/png",
+      });
+    });
+
+    it("should pass previewSize to the API", async () => {
+      mockGetBinary.mockResolvedValueOnce(binary("PNGDATA", "image/png"));
+
+      await callTool("task_attachment_get", { taskId: 1, attachmentId: 3, previewSize: "md" });
+
+      expect(mockGetBinary).toHaveBeenCalledWith("/tasks/1/attachments/3", { preview_size: "md" });
+    });
+
+    it("should return text files as text", async () => {
+      mockGetBinary.mockResolvedValueOnce(binary("hello", "text/plain; charset=utf-8"));
+
+      const response = await callTool("task_attachment_get", { taskId: 1, attachmentId: 3 });
+
+      expect(response.content[1]).toEqual({ type: "text", text: "hello" });
+    });
+
+    it("should return other files as an embedded resource", async () => {
+      mockGetBinary.mockResolvedValueOnce(binary("%PDF", "application/pdf"));
+
+      const response = (await callTool("task_attachment_get", {
+        taskId: 1,
+        attachmentId: 3,
+      })) as unknown as { content: Array<{ type: string; resource?: Record<string, string> }> };
+
+      expect(response.content[1].type).toBe("resource");
+      expect(response.content[1].resource).toEqual({
+        uri: "vikunja://tasks/1/attachments/3",
+        mimeType: "application/pdf",
+        blob: Buffer.from("%PDF").toString("base64"),
+      });
+    });
+
+    it("should save to disk when savePath is given", async () => {
+      const { mkdtemp, readFile } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const dir = await mkdtemp(join(tmpdir(), "vikunja-mcp-"));
+      const savePath = join(dir, "out.png");
+      mockGetBinary.mockResolvedValueOnce(binary("PNGDATA", "image/png"));
+
+      const response = await callTool("task_attachment_get", {
+        taskId: 1,
+        attachmentId: 3,
+        savePath,
+      });
+      const data = parseResponse(response);
+
+      expect(data.savedTo).toBe(savePath);
+      expect(data.size).toBe(7);
+      expect((await readFile(savePath)).toString()).toBe("PNGDATA");
+    });
+
+    it("should reject attachments over the inline size limit", async () => {
+      mockGetBinary.mockResolvedValueOnce({
+        data: { buffer: Buffer.alloc(5 * 1024 * 1024 + 1), contentType: "image/png" },
+      });
+
+      const response = await callTool("task_attachment_get", { taskId: 1, attachmentId: 3 });
+      const data = parseResponse(response);
+
+      expect(response.isError).toBe(true);
+      expect(data.message).toContain("previewSize");
+    });
+  });
 
   describe("task_comments_list", () => {
     it("should list comments on a task", async () => {

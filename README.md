@@ -88,6 +88,7 @@ Add to your config file:
 │  [■] KANBAN        Buckets, move tasks, WIP limits      │
 │  [■] LABELS        Create, attach, remove from tasks    │
 │  [■] COMMENTS      Add and list task comments           │
+│  [■] ATTACHMENTS   List and download (images inline)    │
 │  [■] ASSIGNEES     Manage who's working on what         │
 │  [■] RELATIONS     Subtasks, blocking, dependencies     │
 │  [■] VIEWS         List, kanban, table, gantt           │

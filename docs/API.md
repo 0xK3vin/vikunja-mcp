@@ -247,6 +247,35 @@ Remove a label from a task.
 
 ---
 
+## Attachment Tools
+
+### `task_attachments_list`
+
+List all attachments on a task.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | number | Yes | The task ID |
+
+**Returns:** Array of attachment objects (with file name, MIME type and size)
+
+---
+
+### `task_attachment_get`
+
+Download a task attachment.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | number | Yes | The task ID |
+| `attachmentId` | number | Yes | The attachment ID |
+| `previewSize` | string | No | Images only: return a resized PNG preview (`sm`, `md`, `lg`, `xl`) |
+| `savePath` | string | No | Absolute path to write the file to instead of returning it |
+
+**Returns:** Attachment metadata, plus the content: PNG/JPEG/GIF/WebP images as inline image content, text files as text, anything else as an embedded base64 resource. Files over 5 MB must use `savePath` (or `previewSize` for images). With `savePath`, returns metadata and the saved path.
+
+---
+
 ## Comment Tools
 
 ### `task_comments_list`

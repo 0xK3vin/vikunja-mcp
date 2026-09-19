@@ -514,6 +514,31 @@ describe("VikunjaClient", () => {
       });
     });
 
+    describe("binary responses", () => {
+      it("should return raw bytes, content type and filename", async () => {
+        const headers = new Headers();
+        headers.set("content-type", "image/png");
+        headers.set("content-disposition", 'attachment; filename="shot.png"');
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers,
+          arrayBuffer: async () => new TextEncoder().encode("PNGDATA").buffer,
+        });
+
+        const result = await client.getBinary("/tasks/1/attachments/3", { preview_size: "md" });
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          "https://vikunja.example.com/api/v1/tasks/1/attachments/3?preview_size=md",
+          expect.objectContaining({ method: "GET" })
+        );
+        expect(result.data.buffer.toString()).toBe("PNGDATA");
+        expect(result.data.contentType).toBe("image/png");
+        expect(result.data.filename).toBe("shot.png");
+      });
+    });
+
     describe("retry logic", () => {
       it("should retry on 5xx errors and succeed", async () => {
         // First two attempts fail with 503, third succeeds
