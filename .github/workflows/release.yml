@@ -1,12 +1,6 @@
 # GitHub Actions workflow for publishing releases to npm
-# 
-# IMPORTANT: Before using this workflow, you need to:
-# 1. Create an npm access token at https://www.npmjs.com/settings/<your-username>/tokens
-# 2. Add the token as a repository secret named NPM_TOKEN:
-#    - Go to your repository Settings > Secrets and variables > Actions
-#    - Click "New repository secret"
-#    - Name: NPM_TOKEN
-#    - Value: <your-npm-token>
+# Uses npm Trusted Publishing via OIDC; no publishing token secret is required.
+# npm's trusted publisher must match 0xK3vin/vikunja-mcp and release.yml.
 
 name: Release
 
@@ -17,16 +11,42 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Verify npm supports trusted publishing
+        run: |
+          node --version
+          npm --version
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          const version = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim();
+          const minimum = [11, 5, 1];
+          const current = version.split('.').map(Number);
+          let compatible = /^\d+\.\d+\.\d+$/.test(version) && current.every(Number.isSafeInteger);
+          for (let i = 0; compatible && i < minimum.length; i++) {
+            if (current[i] !== minimum[i]) {
+              compatible = current[i] > minimum[i];
+              break;
+            }
+          }
+          if (!compatible) {
+            console.error(`Trusted publishing requires npm >=11.5.1; found ${version || 'an unparseable version'}.`);
+            process.exit(1);
+          }
+          NODE
       
       - name: Install dependencies
         run: npm ci
@@ -36,5 +56,3 @@ jobs:
       
       - name: Publish to npm
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
