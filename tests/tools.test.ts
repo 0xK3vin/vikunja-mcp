@@ -409,7 +409,15 @@ describe("MCP Tool Handlers", () => {
   });
 
   describe("tasks_update", () => {
-    it("should update a task", async () => {
+    it("should fetch the current task and merge changes into a full update", async () => {
+      const existingTask = {
+        id: 1,
+        title: "Original Task",
+        description: "Original description",
+        priority: 1,
+        done: false,
+      };
+      mockGet.mockResolvedValueOnce({ data: existingTask });
       const mockTask = { id: 1, title: "Updated Task", done: true };
       mockPost.mockResolvedValueOnce({ data: mockTask });
 
@@ -423,17 +431,46 @@ describe("MCP Tool Handlers", () => {
       });
       const data = parseResponse(response);
 
+      expect(mockGet).toHaveBeenCalledWith("/tasks/1");
       expect(mockPost).toHaveBeenCalledWith("/tasks/1", {
         title: "Updated Task",
-        done: true,
+        description: "Original description",
+        due_date: undefined,
+        start_date: undefined,
+        end_date: undefined,
         priority: 5,
+        done: true,
+        hex_color: undefined,
+        percent_done: undefined,
         project_id: 2,
         is_favorite: true,
+        repeat_after: undefined,
+        repeat_mode: undefined,
+        assignees: undefined,
+        labels: undefined,
       });
       expect(data).toEqual(mockTask);
     });
 
+    it("should not clear the description when only marking a task done", async () => {
+      const existingTask = {
+        id: 1,
+        title: "Task with a description",
+        description: "Do not lose me",
+        done: false,
+      };
+      mockGet.mockResolvedValueOnce({ data: existingTask });
+      mockPost.mockResolvedValueOnce({ data: { ...existingTask, done: true } });
+
+      await callTool("tasks_update", { taskId: 1, done: true });
+
+      const sentBody = mockPost.mock.calls[0][1] as Record<string, unknown>;
+      expect(sentBody.description).toBe("Do not lose me");
+      expect(sentBody.done).toBe(true);
+    });
+
     it("should update task with all date fields", async () => {
+      mockGet.mockResolvedValueOnce({ data: { id: 1, title: "Existing Task" } });
       mockPost.mockResolvedValueOnce({ data: { id: 1 } });
 
       await callTool("tasks_update", {
@@ -447,12 +484,21 @@ describe("MCP Tool Handlers", () => {
       });
 
       expect(mockPost).toHaveBeenCalledWith("/tasks/1", {
+        title: "Existing Task",
+        description: "Updated description",
         due_date: "2024-12-31T23:59:59Z",
         start_date: "2024-12-01T00:00:00Z",
         end_date: "2024-12-15T00:00:00Z",
+        priority: undefined,
+        done: undefined,
         hex_color: "ff0000",
         percent_done: 0.75,
-        description: "Updated description",
+        project_id: undefined,
+        is_favorite: undefined,
+        repeat_after: undefined,
+        repeat_mode: undefined,
+        assignees: undefined,
+        labels: undefined,
       });
     });
   });
